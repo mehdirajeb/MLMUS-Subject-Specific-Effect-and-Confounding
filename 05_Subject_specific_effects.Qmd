@@ -1,0 +1,392 @@
+---
+title: "Chapter 5.Subject-specific effects, endogeneity, and unobserved confounding"
+author: 
+- JoonHo Lee (jlee296@ua.edu)
+- Mehdi Rajeb
+date: "January 27, 2023"
+format: html
+---
+
+```{r basic_setup, include=FALSE}
+#| label: load-packages
+#| #| include: false
+library(tidyverse)
+library(haven)
+library(broom)
+library(janitor)
+library(dplyr)
+library(tidyr)
+library(multcomp)
+library(foreign)
+library(lme4)
+library(lmerTest)
+library(lmtest)
+library(sandwich)
+library(plm)
+library(predictmeans)
+library(epiDisplay)
+library(lattice)
+
+```
+
+# Introduction (5.1)
+
+In this chapter, we discuss models with subject-specific effects (typically intercepts) when some of the covariates are correlated with some of the error terms. Such correlations are referred to as endogeneity in economics and as unobserved confounding in other fields, such as epidemiology. Many of the methods discussed in this chapter are from econometrics but are equally applicable in other fields that rely on nonexperimental data.
+
+## Data used in this chapter
+
+In most of this chapter, we used the `wage`-panel data. Let us get some idea about the data set first.
+
+Let us have a look at the variables in the the wage-panel data.
+
+-   `nr`: person identifier ($j$)
+
+-   `lwage`: log hourly wage in U.S. dollars ($y_{ij}$)
+
+-   Race/ Ethnicity (reference category is White)
+
+    -   `black` : dummy variable for being Black ($x_{2j}$)
+
+    -   `hisp`: dummy variable for being Hispanic($x_{3j}$)
+
+-   `union`: dummy variable for being a member of a union (that is, wage being set in collective bargaining agreement) ($x_{4ij}$)
+
+-   `married` : dummy variable for being married ($x_{5ij}$)
+
+-   `exper`: labor-market experience, defined as age-6- educ($L_{ij}$)
+
+-   `year`: calendar year 1980-1987($P_i$)
+
+-   `educ` : years of schooling ($E_j$)
+
+Let us import the data.
+
+```{r}
+# Let us get the wagepan data loaded in R
+df <- read_dta("wagepan.dta")
+
+# let us have a look at the data.
+knitr:: kable(head(df))
+
+```
+
+Also let us construct two required variables.
+
+```{r}
+# we need to construct two new variables, educt and yeart
+df$educt <- df$educ - 12
+df$yeart<- df$year-1980
+
+# let us have a look at the data.
+knitr::kable(head(df))
+
+```
+
+## Random-effects approach: No endogeneity (5.2)
+
+Following econometric practice, let us estimate the random-effect model for each participants. In this segment, we will use `R-PLM` package for estimating various models.
+
+```{r}
+# Random effect model with lwage as the dependent variable, and nr as the grouping variable with FGLS method.
+# To estimate the model, we will use `PLM` R-package. 
+mod_1<- plm(lwage ~ black + hisp+ union + married + exper + yeart +educt, 
+        data = df, 
+        model = "random", 
+        index = c("nr"),
+        effect= "individual", 
+        method = "fgls")
+
+# Let us have a look at the estimates
+summary(mod_1)
+
+```
+
+The `mod_1` estimates are providing general standard error estimates. Let us convert the standard errors to Robust standard error.
+
+```{r}
+# However, mod_1 will not provide estimates with robust standard error.
+# To obtain the estimates with robust standard error, we need to run an additional function. 
+mod_2<- coeftest(mod_1, 
+                 vcov.=function(x)vcovHC(x, type ='sss'))
+
+# let us have a look at the estimates.
+mod_2
+```
+
+## Fixed-effects approach: Level-2 endogeneity (5.3)
+
+If there is level-2 endogeneity, random-effects estimators are inconsistent. This problem could be due to unobserved subject-level confounding, where omitted time-constant covariates are correlated with the included covariates. To handle the problem, fixed-effects approaches are often used that produce estimates of the coefficients of level-1 covariates but not of level-2 covariates.
+
+### De-meaning and subject dummies (5.3.1)
+
+**De-meaning**
+
+Estimating fixed effect model.
+
+```{r}
+#Let us estimate the fixed-effects within subject regression
+
+#To estimate the model we are using PLM R-package. 
+
+mod_3<-plm(lwage ~  union + married + exper + yeart , 
+        data = df, 
+        model = "within", 
+        index = c("nr"),
+        effect= "individual", 
+        method = "fe")
+
+# Let us have a look at the estimates
+
+summary(mod_3)
+
+```
+
+The error estimates in the previous fixed-effect model are not robust. To estimate the robust standard errors, we need to run additional codes.
+
+```{r}
+# Let us use the following code to obtain the robust standard errors.
+mod_4<- coeftest(mod_3, 
+                 vcov.=function(x)vcovHC(x, type ='sss')
+                 )
+
+# Let us have a look at the estimates now. 
+mod_4
+
+```
+
+All the estimates are reported under "De-meaning" in table 5.2.
+
+![**Table 5.2**: Estimates for subject-specific models for wage-panel data.](table5.2.jpg)
+
+## Hausman test(5.3.2)
+
+The Hausman test can be used to investigate level-2 endogeneity of the time-varying covariates by comparing fixed-effects and random effects estimators of their coefficients. The Hausman test will compare the coefficients of all time-varying covariates, including `exper`, and will not "know" that the coefficients have different meanings, or that their true values are different. We can prevent the `Hausman test` from comparing the coefficients of `exper` by using a different variable named `exper_copy` in one of the models.
+
+So let us create a copy of the `exper` variable.
+
+```{r}
+# Creating a copy of exper variable
+df<- df %>% 
+  mutate(
+    exper_copy = exper
+    )
+
+```
+
+Now we refit the random-intercept model with this new variable name (instead of `exper`),and store the model under ri.
+
+```{r}
+# We are estimating the random-effects model using PLM package
+ri<- plm(lwage ~  black+hisp+ union+married + exper_copy+ yeart+educt , 
+          data = df, 
+          model ="random",
+          method = "re")
+
+# let us have a look at the estimated coefficients
+ri_coeff<- as.data.frame(ri$coefficients)
+ri_coeff
+
+```
+
+Note that we have used model-based standard error. We also refit the fixed-effects model with model-based standard errors.
+
+```{r}
+# We are estimating the random-effects model using PLM package
+fi<- plm(lwage ~  union+ married + exper,  
+         data = df, 
+         model= "within", 
+         method = "fe")
+
+# let us have a look at the estimated coefficients
+fi_coeff<- as.data.frame(fi$coefficients)
+fi_coeff
+
+```
+
+We are now ready to perform the `Hausman test` using the `plm::phtest()` function.
+
+```{r}
+# To perform Hausman test, we can use the following command comparing random effect and fixed effect models. 
+plm::phtest(fi,ri)
+
+```
+
+We conclude from the output that the fixed and random-effects approaches produce significantly different estimates, which suggests that `union`and/or `married` are level-2 endogenous.
+
+## Mundlak approach and robust Hausman test (5.3.3)
+
+We first construct the required subject means to be included in the model.
+
+```{r}
+# Generating mean of Union and married.
+# mn_union = mean of union
+# mn_married = mean of married
+
+df<- df %>% 
+  group_by(nr) %>% 
+  mutate(mn_union = mean(union, na.rm = T), 
+         mn_married = mean(married, na.rm=T)
+         )
+head(df)
+```
+
+Now we fit the random effect model with robust standard error.
+
+```{r}
+# To estimate the random effect model, we will use the PLM R-package.
+# We may not be able to estimate the random effect model with robust standard error directly in R. 
+model_formula <- lwage ~ black + hisp+ union + married + exper + yeart + educt + mn_union + mn_married
+model_5<- plm( model_formula, 
+               data = df, 
+               model = c("random"),
+               index = c("nr"),
+               effect= "individual", 
+               method = "fgls")
+
+# Let us have a look at model_5
+summary(model_5)
+
+
+```
+
+We need to further transform the error to achieve estimates with robust standard error.
+
+```{r}
+# After estimating the model_5, we can re-estimate the model with robust standard error.
+model_5_rse<- coeftest(model_5, 
+                       vcov.=function(x)vcovHC(x, type ='sss')
+                       )
+model_5_rse
+```
+
+As expected, the point estimates for `union`, `married`, and `exper` are identical to the fixed-effects estimates. Robust standard errors were used to obtain valid inferences if the covariance structure is misspecified, for example if the level-1 errors are autocorrelated or heteroskedastic.
+
+## First-differencing (5.3.4)
+
+The three fixed-effects approaches discussed so far (de-meaning, subject dummies,and Mundlak) produce identical estimators of the coefficients of time-varying covariates, often referred to as the fixed-effects estimator in econometrics. A fourth approach that also handles level-2 endogeneity is the difference estimator .
+
+To use the time-series operations, we can use the `PLM` R-package defining the model as first difference model.
+
+```{r}
+# Linear regression using first difference
+model_6<- plm(lwage ~  union + married, 
+          data = df, 
+          model = "fd", 
+          index = c("nr"),
+          effect= "individual", 
+          method ="fgls")
+
+summary(model_6)
+
+```
+
+The model is estimated based on the first differences. However, the standard model errors were estimated in this case. If we wish to estimate the robust standard error, we may use the following R-code.
+
+```{r}
+# First difference model coefficients with robust standard error
+coeftest(model_6, 
+         vcov.=function(x)vcovHC(x, type ='sss')
+         )
+
+```
+
+## Difference-in differences and repeated-measure ANOVA (5.4)
+
+### Does raising the minimum wage reduce employment?(5.4.1)
+
+According to economic theory, increases in minimum wage should lead to decreased employment because labor becomes more expensive.Here we analyze data from the classic paper by @card1994american. The data is called `minwage`, and has following variables of our interest.
+
+-   `store` : restaurant or store identifier
+
+-   `post`: dummy variable for post-intervention survey wave(0= pre, 1=post)
+
+-   `state` : State(0 = PA, 1 = NJ)
+
+-   `fte` : number of full-time employees
+
+Let us read the data using `read_dta` R-function from `haven` package.
+
+```{r}
+# Importing minwage data
+# we are naming the data as df_mw. here, mw stands for mean wage. 
+df_mw<- read_dta("minwage.dta")
+
+# Let us have a look at the data
+head(df_mw)
+
+```
+
+To perform our next analysis, let us construct the interaction variable `treated` which can be interpreted as a time-varying dummy variable for treatment status (minimum wage increased or not)
+
+```{r}
+# Creating variable `treated`
+df_mw<-df_mw %>% 
+            mutate(treated = state*post)
+```
+
+Now, we estimate both the random and fixed effect models using the `minwage` data.
+
+```{r}
+#Model estimation. 
+model_7<- plm(fte ~  post + treated, 
+          data = df_mw, 
+          model = "within", 
+          index = c("store"),
+          effect= "individual", 
+          method ="re")
+
+summary(model_7)
+```
+
+To obtain the robust standard errors, we have to use the following codes.
+
+```{r}
+# Estimates with robust standard error
+model_7_rse<- coeftest(model_7, 
+                       vcov.=function(x)vcovHC(x, type ='sss')
+                       )
+model_7_rse
+```
+
+## Subject-specific coefficients(5.5)
+
+### Random-coefficient model: No endogeneity(5.5.1)
+
+In this segment, we will use the `wagepan` data. We are trying to investigate whether different subject's wages increase at different rates with each extra year of experience. We can use `R-lme4' package do estimate the model.  
+
+Let us fit the random-coefficient model.
+
+```{r}
+#Model estimation. 
+model_8<- lmer(lwage ~ black + hisp + union + married + exper + yeart + educt+ (1 + exper|nr),
+               data= df,
+               REML = F
+              )
+
+summary(model_8)
+```
+
+We can test whether the random slope is needed by comparing the model with the corresponding random-intercept model using a likelihood-ratio test. To do so, first let us estimate the random effect model without considering the effect of `exper`.
+
+```{r}
+#Model estimation. 
+model_9<- lmer(lwage ~ black + hisp + union + married + exper + yeart + educt+ (1 + 1|nr),
+               data= df,
+               REML = F
+              )
+
+summary(model_9)
+```
+
+Now, we can us `anova` function to compare the differences in this two models ` model_8` and 'model_9`. 
+
+```{r}
+# Test : whether random intercept model is acceptable or not
+anova(model_8,model_9)
+```
+
+Since, the $p-value$ is less than 0.05 we may conclude that random-intercept model is rejected at 5% level of significance.
+
+### Fixed-coefficient model: Level-2 endogeneity (5.5.2)
+
+# References
